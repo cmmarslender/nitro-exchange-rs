@@ -74,7 +74,7 @@ async fn handshake(
     let shared = server_secret.diffie_hellman(&client_pub);
     let shared_secret_bytes = shared.raw_secret_bytes();
 
-    // HKDF using the client providced salt + info
+    // HKDF using the client provided salt + info
     let salt = general_purpose::STANDARD.decode(&payload.salt).expect("invalid base64 salt");
     let info = payload.info.as_bytes();
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret_bytes);

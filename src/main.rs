@@ -5,12 +5,15 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use axum::http::StatusCode;
 use base64::{engine::general_purpose, Engine as _};
 use hkdf::Hkdf;
 use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
 use p256::elliptic_curve::rand_core::OsRng;
 use sha2::Sha256;
 use uuid::Uuid;
+
+const INFO_STRING: &str = "nitro-key-exchange-v1";
 
 #[derive(Deserialize)]
 struct ClientHandshake {
@@ -49,7 +52,12 @@ async fn main() {
 async fn handshake(
     State(state): State<AppState>,
     Json(payload): Json<ClientHandshake>,
-) -> Json<ServerHandshake> {
+) -> Result<Json<ServerHandshake>, (StatusCode, String)> {
+    // Make sure we're using the known/agreed upon info
+    if payload.info != INFO_STRING {
+        return Err((StatusCode::BAD_REQUEST, "invalid info string".into()));
+    }
+
     // Read the clients public key
     let client_pub_bytes = general_purpose::STANDARD
         .decode(&payload.public_key)
@@ -80,8 +88,8 @@ async fn handshake(
         sessions.insert(session_id.clone(), okm.to_vec());
     }
 
-    Json(ServerHandshake {
+    Ok(Json(ServerHandshake {
         session_id,
         public_key: server_pub_b64,
-    })
+    }))
 }

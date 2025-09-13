@@ -1,6 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use axum::http::StatusCode;
+use axum::serve::Listener;
 use axum::{Json, Router, extract::State, http, routing::post};
 use base64::{Engine as _, engine::general_purpose};
 use clap::{Parser, Subcommand};
@@ -15,6 +16,7 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
+use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -76,6 +78,9 @@ enum Mode {
     Server {
         #[arg(long, default_value = "3001")]
         port: u16,
+
+        #[arg(long)]
+        vsock: bool,
     },
     /// Run as a client that talks to the server
     Client {
@@ -89,8 +94,8 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.mode {
-        Mode::Server { port } => {
-            run_server(port).await;
+        Mode::Server { port, vsock } => {
+            run_server(port, vsock).await;
         }
         Mode::Client { url: _ } => {
             println!("Not Implemented");
@@ -98,7 +103,7 @@ async fn main() {
     }
 }
 
-async fn run_server(port: u16) {
+async fn run_server(port: u16, vsock: bool) {
     env_logger::init();
 
     let state = AppState {
@@ -116,11 +121,17 @@ async fn run_server(port: u16) {
         .with_state(state)
         .layer(cors);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    info!("Listening on {}", addr);
-    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
-        .await
-        .unwrap();
+    if vsock {
+        let addr = VsockAddr::new(VMADDR_CID_ANY, port as u32);
+        let listener = VsockListener::bind(addr).expect("failed to bind vsock");
+        let acceptor = VsockAcceptor::new(listener);
+        axum::serve(acceptor, app).await.unwrap();
+    } else {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        info!("Listening on {}", addr);
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    }
 }
 
 async fn handshake(
@@ -225,4 +236,28 @@ async fn decrypt(
     );
 
     Ok(Json(DecryptResponse { plaintext }))
+}
+
+// Adapts the vsock listener to work with axum
+struct VsockAcceptor {
+    inner: VsockListener,
+}
+
+impl VsockAcceptor {
+    fn new(listener: VsockListener) -> Self {
+        Self { inner: listener }
+    }
+}
+
+impl Listener for VsockAcceptor {
+    type Io = tokio_vsock::VsockStream;
+    type Addr = tokio_vsock::VsockAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        self.inner.accept().await.expect("vsock accept failed")
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.inner.local_addr()
+    }
 }

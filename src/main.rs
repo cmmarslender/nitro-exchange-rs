@@ -24,19 +24,27 @@ struct HandshakeResponse {
 }
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     // Store session_id -> AES key mapping
-    sessions: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    pub sessions: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    // Proxy configuration
+    pub proxy_config: Option<ProxyConfig>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone)]
+pub struct ProxyConfig {
+    pub cid: u32,
+    pub vsock_port: u32,
+}
+
+#[derive(Serialize, Deserialize)]
 struct DecryptRequest {
     session_id: String,
     ciphertext: String,
     initialization_vector: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct DecryptResponse {
     plaintext: String,
 }
@@ -57,6 +65,15 @@ enum Mode {
 
         #[arg(long)]
         vsock: bool,
+
+        #[arg(long)]
+        proxy: bool,
+
+        #[arg(long, default_value = "16")]
+        cid: u32,
+
+        #[arg(long, default_value = "5000")]
+        vsock_port: u32,
     },
     /// Run as a client that talks to the server
     Client {
@@ -79,8 +96,14 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.mode {
-        Mode::Server { port, vsock } => {
-            server::run_server(port, vsock).await;
+        Mode::Server {
+            port,
+            vsock,
+            proxy,
+            cid,
+            vsock_port,
+        } => {
+            server::run_server(port, vsock, proxy, cid, vsock_port).await;
         }
         Mode::Client {
             host,

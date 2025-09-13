@@ -68,6 +68,9 @@ enum Mode {
 
         #[arg(long)]
         vsock: bool,
+
+        #[arg(long, default_value = "16")]
+        cid: u32,
     },
 }
 
@@ -79,8 +82,8 @@ async fn main() {
         Mode::Server { port, vsock } => {
             server::run_server(port, vsock).await;
         }
-        Mode::Client { host, port, vsock } => {
-            client::run_client(host, port, vsock).await;
+        Mode::Client { host, port, vsock, cid } => {
+            client::run_client(host, port, vsock, cid).await;
         }
     }
 }

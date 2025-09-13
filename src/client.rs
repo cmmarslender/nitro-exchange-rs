@@ -13,7 +13,7 @@ use hyper_util::rt::tokio::TokioIo;
 use hyper::client::conn;
 use http_body_util::BodyExt; // gives you .collect()
 
-pub(crate) async fn run_client(host: String, port: u16, vsock: bool) {
+pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
     // Generate our own ephemeral keypair for this session
     let client_secret = EphemeralSecret::random(&mut OsRng);
     let client_public = EncodedPoint::from(client_secret.public_key());
@@ -30,7 +30,7 @@ pub(crate) async fn run_client(host: String, port: u16, vsock: bool) {
     };
 
     let resp: HandshakeResponse = if vsock {
-        do_handshake_vsock(VMADDR_CID_ANY, port, &handshake_req).await
+        do_handshake_vsock(cid, port, &handshake_req).await
     } else {
         do_handshake_http(&format!{"{host}:{port}"}, &handshake_req).await
     };

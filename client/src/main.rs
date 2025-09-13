@@ -7,6 +7,7 @@ use http_body_util::Full;
 use hyper::client::conn;
 use hyper::Request;
 use hyper_util::rt::tokio::TokioIo;
+use log::{debug, info};
 use nitro_exchange_common::{HandshakeRequest, HandshakeResponse, INFO_STRING};
 use p256::elliptic_curve::rand_core::OsRng;
 use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
@@ -61,7 +62,11 @@ async fn main() {
         do_handshake_http(&format! {"{host}:{port}"}, &handshake_req).await
     };
 
-    println!("Got session_id: {}", resp.session_id);
+    info!("Got session_id: {}", resp.session_id);
+    match serde_json::to_string(&resp) {
+        Ok(json) => debug!("Attestation response JSON: {}", json),
+        Err(e) => {}
+    }
 
     let server_pub_bytes = general_purpose::STANDARD
         .decode(&resp.public_key)
@@ -80,7 +85,7 @@ async fn main() {
     let mut okm = [0u8; 32]; // 32 bytes = AES-256
     hk.expand(info, &mut okm).unwrap();
 
-    println!(
+    info!(
         "Derived shared private key {}",
         general_purpose::STANDARD.encode(okm)
     );

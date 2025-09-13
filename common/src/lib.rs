@@ -11,6 +11,7 @@ pub struct HandshakeRequest {
 pub struct HandshakeResponse {
     pub session_id: String,
     pub public_key: String,
+    pub attestation: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

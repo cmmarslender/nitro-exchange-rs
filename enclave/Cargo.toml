@@ -1,0 +1,25 @@
+[package]
+name = "nitro-exchange-enclave"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+nitro-exchange-common = { path = "../common" }
+axum = "0.8.4"
+tokio = { version = "1.47.1", features = ["full"] }
+base64 = "0.22.1"
+p256 = { version = "0.13.2", features = ["ecdh"] }
+hkdf = "0.12.4"
+sha2 = "0.10.9"
+uuid = { version = "1.18.1", features = ["v4"] }
+tower-http = { version = "0.6.6", features = ["cors"] }
+aes-gcm = "0.10.3"
+log = "0.4.28"
+clap = { version = "4.5.47", features = ["derive"] }
+tokio-vsock = "0.7.2"
+env_logger = "0.11.8"
+
+[features]
+default = []
+insecure-logs = []

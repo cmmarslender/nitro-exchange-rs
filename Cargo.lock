@@ -1043,11 +1043,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "nitro-exchange-rs"
+name = "nitro-exchange-client"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
- "axum",
  "base64",
  "bytes",
  "clap",
@@ -1056,17 +1054,61 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "log",
+ "nitro-exchange-common",
  "p256",
  "rand",
  "reqwest",
- "serde",
  "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-vsock",
+]
+
+[[package]]
+name = "nitro-exchange-common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "nitro-exchange-enclave"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "axum",
+ "base64",
+ "clap",
+ "env_logger",
+ "hkdf",
+ "log",
+ "nitro-exchange-common",
+ "p256",
  "sha2",
  "tokio",
  "tokio-vsock",
  "tower-http",
  "uuid",
+]
+
+[[package]]
+name = "nitro-exchange-proxy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "clap",
+ "env_logger",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "nitro-exchange-common",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-vsock",
+ "tower-http",
 ]
 
 [[package]]

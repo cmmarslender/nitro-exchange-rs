@@ -1,19 +1,45 @@
-use crate::{HandshakeRequest, HandshakeResponse};
-use aes_gcm::aead::OsRng;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
+use clap::Parser;
 use hkdf::Hkdf;
 use http_body_util::BodyExt;
 use http_body_util::Full;
-use hyper::Request;
 use hyper::client::conn;
+use hyper::Request;
 use hyper_util::rt::tokio::TokioIo;
-use p256::ecdh::EphemeralSecret;
-use p256::{EncodedPoint, PublicKey};
+use nitro_exchange_common::{HandshakeRequest, HandshakeResponse, INFO_STRING};
+use p256::elliptic_curve::rand_core::OsRng;
+use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
 use sha2::Sha256;
-use tokio_vsock::{VsockAddr, VsockStream}; // gives you .collect()
+use tokio_vsock::{VsockAddr, VsockStream};
 
-pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Cli {
+    #[arg(long, default_value = "http://127.0.0.1")]
+    host: String,
+
+    #[arg(long, default_value = "3001")]
+    port: u16,
+
+    #[arg(long)]
+    vsock: bool,
+
+    #[arg(long, default_value = "5")]
+    cid: u32,
+}
+
+#[tokio::main]
+async fn main() {
+    env_logger::init();
+
+    let Cli {
+        host,
+        port,
+        vsock,
+        cid,
+    } = Cli::parse();
+
     // Generate our own ephemeral keypair for this session
     let client_secret = EphemeralSecret::random(&mut OsRng);
     let client_public = EncodedPoint::from(client_secret.public_key());
@@ -26,7 +52,7 @@ pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
     let handshake_req = HandshakeRequest {
         public_key: client_pub_b64,
         salt: salt_b64,
-        info: crate::INFO_STRING.to_string(),
+        info: INFO_STRING.to_string(),
     };
 
     let resp: HandshakeResponse = if vsock {
@@ -49,7 +75,7 @@ pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
     let shared_secret_bytes = shared.raw_secret_bytes();
 
     // HKDF using the generated salt + info
-    let info = crate::INFO_STRING.as_bytes();
+    let info = INFO_STRING.as_bytes();
     let hk = Hkdf::<Sha256>::new(Some(&salt_bytes), shared_secret_bytes);
     let mut okm = [0u8; 32]; // 32 bytes = AES-256
     hk.expand(info, &mut okm).unwrap();

@@ -1,32 +1,24 @@
-use crate::{
-    AppState, DecryptRequest, DecryptResponse, HandshakeRequest, HandshakeResponse, INFO_STRING,
-    ProxyConfig,
-};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use axum::http::StatusCode;
 use axum::serve::Listener;
-use axum::{Json, Router, extract::State, http, routing::post};
-use base64::{Engine as _, engine::general_purpose};
-use bytes::Bytes;
+use axum::{extract::State, http, routing::post, Json, Router};
+use base64::{engine::general_purpose, Engine as _};
+use clap::Parser;
 use hkdf::Hkdf;
-use http_body_util::BodyExt;
-use http_body_util::Full;
-use hyper::Request;
-use hyper::client::conn;
-use hyper_util::rt::tokio::TokioIo;
 use log::info;
+use nitro_exchange_common::{
+    DecryptRequest, DecryptResponse, HandshakeRequest, HandshakeResponse, INFO_STRING,
+};
 use p256::elliptic_curve::rand_core::OsRng;
-use p256::{EncodedPoint, PublicKey, ecdh::EphemeralSecret};
-use serde::{Serialize, de::DeserializeOwned};
+use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
 use sha2::Sha256;
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tokio_vsock::VsockStream;
-use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
+use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -42,18 +34,30 @@ macro_rules! sensitivelog {
     ($($arg:tt)*) => {};
 }
 
-pub(crate) async fn run_server(port: u16, vsock: bool, proxy: bool, cid: u32, vsock_port: u32) {
+#[derive(Clone)]
+pub struct AppState {
+    // Store session_id -> AES key mapping
+    pub sessions: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Cli {
+    #[arg(long, default_value = "3001")]
+    port: u16,
+
+    #[arg(long)]
+    vsock: bool,
+}
+
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
-    let proxy_config = if proxy {
-        Some(ProxyConfig { cid, vsock_port })
-    } else {
-        None
-    };
+    let Cli { vsock, port } = Cli::parse();
 
     let state = AppState {
         sessions: Arc::new(Mutex::new(HashMap::new())),
-        proxy_config,
     };
 
     let cors = CorsLayer::new()
@@ -62,8 +66,8 @@ pub(crate) async fn run_server(port: u16, vsock: bool, proxy: bool, cid: u32, vs
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/handshake", post(handshake_handler))
-        .route("/decrypt", post(decrypt_handler))
+        .route("/handshake", post(handshake))
+        .route("/decrypt", post(decrypt))
         .with_state(state)
         .layer(cors);
 
@@ -71,127 +75,19 @@ pub(crate) async fn run_server(port: u16, vsock: bool, proxy: bool, cid: u32, vs
         let addr = VsockAddr::new(VMADDR_CID_ANY, u32::from(port));
         let listener = VsockListener::bind(addr).expect("failed to bind vsock");
         let acceptor = VsockAcceptor::new(listener);
-        info!("Listening on cid: {VMADDR_CID_ANY}, port: {port}");
+        info!("Listening on cid, port: {port}");
         axum::serve(acceptor, app).await.unwrap();
     } else {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
         info!("Listening on {addr}");
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
     }
 }
 
-// Handler that either processes locally or proxies to vsock
-async fn handshake_handler(
+async fn handshake(
     State(state): State<AppState>,
     Json(payload): Json<HandshakeRequest>,
-) -> Result<Json<HandshakeResponse>, (StatusCode, String)> {
-    if let Some(proxy_config) = &state.proxy_config {
-        // Proxy mode: forward to vsock
-        proxy_request(proxy_config.clone(), "/handshake", payload).await
-    } else {
-        // Local mode: process directly
-        handshake_local(&state, &payload)
-    }
-}
-
-// Handler that either processes locally or proxies to vsock
-async fn decrypt_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<DecryptRequest>,
-) -> Result<Json<DecryptResponse>, (StatusCode, String)> {
-    if let Some(proxy_config) = &state.proxy_config {
-        proxy_request(proxy_config.clone(), "/decrypt", payload).await
-    } else {
-        decrypt_local(&state, &payload)
-    }
-}
-
-async fn proxy_request<Req, Resp>(
-    proxy_config: ProxyConfig,
-    endpoint: &str,
-    payload: Req,
-) -> Result<Json<Resp>, (StatusCode, String)>
-where
-    Req: Serialize,
-    Resp: DeserializeOwned,
-{
-    // Connect to enclave vsock
-    let addr = VsockAddr::new(proxy_config.cid, proxy_config.vsock_port);
-    let stream = VsockStream::connect(addr).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("vsock connect failed: {e}"),
-        )
-    })?;
-    let io = TokioIo::new(stream);
-
-    let (mut sender, conn) = conn::http1::handshake(io).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("http handshake failed: {e}"),
-        )
-    })?;
-
-    tokio::spawn(async move {
-        if let Err(err) = conn.await {
-            eprintln!("connection error: {err:?}");
-        }
-    });
-
-    // Create HTTP request
-    let json_body = serde_json::to_string(&payload).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("json serialization failed: {e}"),
-        )
-    })?;
-
-    let req: Request<Full<Bytes>> = Request::builder()
-        .method("POST")
-        .uri(endpoint)
-        .header("content-type", "application/json")
-        .body(Full::from(Bytes::from(json_body)))
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("request build failed: {e}"),
-            )
-        })?;
-
-    // Send to enclave
-    let resp = sender.send_request(req).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("request failed: {e}"),
-        )
-    })?;
-
-    // Parse response
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("body read failed: {e}"),
-            )
-        })?
-        .to_bytes();
-
-    let response: Resp = serde_json::from_slice(&body_bytes).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("json parse failed: {e}"),
-        )
-    })?;
-
-    Ok(Json(response))
-}
-
-fn handshake_local(
-    state: &AppState,
-    payload: &HandshakeRequest,
 ) -> Result<Json<HandshakeResponse>, (StatusCode, String)> {
     // Make sure we're using the known/agreed upon info
     if payload.info != INFO_STRING {
@@ -243,9 +139,9 @@ fn handshake_local(
     }))
 }
 
-fn decrypt_local(
-    state: &AppState,
-    payload: &DecryptRequest,
+async fn decrypt(
+    State(state): State<AppState>,
+    Json(payload): Json<DecryptRequest>,
 ) -> Result<Json<DecryptResponse>, (StatusCode, String)> {
     // Look up the session key to get the shared aes key
     let key_bytes = {

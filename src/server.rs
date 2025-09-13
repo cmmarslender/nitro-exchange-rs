@@ -52,14 +52,14 @@ pub(crate) async fn run_server(port: u16, vsock: bool) {
         .layer(cors);
 
     if vsock {
-        let addr = VsockAddr::new(VMADDR_CID_ANY, port as u32);
+        let addr = VsockAddr::new(VMADDR_CID_ANY, u32::from(port));
         let listener = VsockListener::bind(addr).expect("failed to bind vsock");
         let acceptor = VsockAcceptor::new(listener);
         info!("Listening on cid: {VMADDR_CID_ANY}, port: {port}");
         axum::serve(acceptor, app).await.unwrap();
     } else {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        info!("Listening on {}", addr);
+        info!("Listening on {addr}");
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
     }

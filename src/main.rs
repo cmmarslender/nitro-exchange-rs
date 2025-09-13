@@ -5,18 +5,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod client;
 mod server;
 
 const INFO_STRING: &str = "nitro-key-exchange-v1";
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct HandshakeRequest {
     public_key: String,
     salt: String,
     info: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct HandshakeResponse {
     session_id: String,
     public_key: String,
@@ -72,8 +73,8 @@ async fn main() {
         Mode::Server { port, vsock } => {
             server::run_server(port, vsock).await;
         }
-        Mode::Client { url: _ } => {
-            println!("Not Implemented");
+        Mode::Client { url } => {
+            client::run_client(url).await;
         }
     }
 }

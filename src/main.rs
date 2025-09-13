@@ -82,7 +82,12 @@ async fn main() {
         Mode::Server { port, vsock } => {
             server::run_server(port, vsock).await;
         }
-        Mode::Client { host, port, vsock, cid } => {
+        Mode::Client {
+            host,
+            port,
+            vsock,
+            cid,
+        } => {
             client::run_client(host, port, vsock, cid).await;
         }
     }

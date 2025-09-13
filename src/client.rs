@@ -1,17 +1,17 @@
 use crate::{HandshakeRequest, HandshakeResponse};
 use aes_gcm::aead::OsRng;
 use base64::{Engine as _, engine::general_purpose};
+use bytes::Bytes;
 use hkdf::Hkdf;
+use http_body_util::BodyExt;
+use http_body_util::Full;
+use hyper::Request;
+use hyper::client::conn;
+use hyper_util::rt::tokio::TokioIo;
 use p256::ecdh::EphemeralSecret;
 use p256::{EncodedPoint, PublicKey};
 use sha2::Sha256;
-use tokio_vsock::{VsockAddr, VsockStream, VMADDR_CID_ANY};
-use hyper::{Request};
-use http_body_util::Full;
-use bytes::Bytes;
-use hyper_util::rt::tokio::TokioIo;
-use hyper::client::conn;
-use http_body_util::BodyExt; // gives you .collect()
+use tokio_vsock::{VsockAddr, VsockStream}; // gives you .collect()
 
 pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
     // Generate our own ephemeral keypair for this session
@@ -32,7 +32,7 @@ pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
     let resp: HandshakeResponse = if vsock {
         do_handshake_vsock(cid, port, &handshake_req).await
     } else {
-        do_handshake_http(&format!{"{host}:{port}"}, &handshake_req).await
+        do_handshake_http(&format! {"{host}:{port}"}, &handshake_req).await
     };
 
     println!("Got session_id: {}", resp.session_id);
@@ -60,11 +60,7 @@ pub(crate) async fn run_client(host: String, port: u16, vsock: bool, cid: u32) {
     );
 }
 
-async fn do_handshake_http(
-    url: &str,
-    handshake_req: &HandshakeRequest,
-) -> HandshakeResponse {
-
+async fn do_handshake_http(url: &str, handshake_req: &HandshakeRequest) -> HandshakeResponse {
     let client = reqwest::Client::new();
 
     client
@@ -84,7 +80,9 @@ async fn do_handshake_vsock(
     handshake_req: &HandshakeRequest,
 ) -> HandshakeResponse {
     let addr = VsockAddr::new(cid, u32::from(port));
-    let stream = VsockStream::connect(addr).await.expect("vsock connect failed");
+    let stream = VsockStream::connect(addr)
+        .await
+        .expect("vsock connect failed");
     let io = TokioIo::new(stream);
 
     let (mut sender, conn) = conn::http1::handshake(io).await.unwrap();

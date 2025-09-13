@@ -63,9 +63,8 @@ async fn main() {
     };
 
     info!("Got session_id: {}", resp.session_id);
-    match serde_json::to_string(&resp) {
-        Ok(json) => debug!("Attestation response JSON: {}", json),
-        Err(e) => {}
+    if let Ok(json) = serde_json::to_string(&resp) {
+        debug!("Attestation response JSON: {json}");
     }
 
     let server_pub_bytes = general_purpose::STANDARD

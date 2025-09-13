@@ -1,5 +1,8 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aws_nitro_enclaves_nsm_api::api::{Request, Response};
+use aws_nitro_enclaves_nsm_api::driver::nsm_init;
+use aws_nitro_enclaves_nsm_api::driver::nsm_process_request;
 use axum::http::StatusCode;
 use axum::serve::Listener;
 use axum::{extract::State, http, routing::post, Json, Router};
@@ -12,9 +15,11 @@ use nitro_exchange_common::{
 };
 use p256::elliptic_curve::rand_core::OsRng;
 use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
+use serde_bytes::ByteBuf;
 use sha2::Sha256;
 use std::{
     collections::HashMap,
+    io,
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
@@ -127,6 +132,15 @@ async fn handshake(
         sessions.insert(session_id.clone(), okm.to_vec());
     }
 
+    let attestation_doc = get_attestation(Some(server_public.as_bytes().to_vec()));
+    let attestation = match attestation_doc {
+        Ok(doc) => Some(general_purpose::STANDARD.encode(doc.as_slice())),
+        Err(err) => {
+            log::warn!("Attestation Failed: {err}");
+            None
+        }
+    };
+
     sensitivelog!(
         "Session ID: {} | Private Key: {}",
         session_id,
@@ -136,6 +150,7 @@ async fn handshake(
     Ok(Json(HandshakeResponse {
         session_id,
         public_key: server_pub_b64,
+        attestation,
     }))
 }
 
@@ -210,5 +225,26 @@ impl Listener for VsockAcceptor {
 
     fn local_addr(&self) -> std::io::Result<Self::Addr> {
         self.inner.local_addr()
+    }
+}
+
+fn get_attestation(user_data: Option<Vec<u8>>) -> Result<Vec<u8>, io::Error> {
+    let fd = nsm_init();
+    if fd < 0 {
+        return Err(io::Error::other("failed to open /dev/nsm"));
+    }
+
+    let req = Request::Attestation {
+        user_data: user_data.map(ByteBuf::from),
+        nonce: None,
+        public_key: None,
+    };
+
+    let resp: Response = nsm_process_request(fd, req);
+
+    match resp {
+        Response::Attestation { document } => Ok(document),
+        Response::Error(err) => Err(io::Error::other(format!("NSM error: {err:?}"))),
+        other => Err(io::Error::other(format!("unexpected response: {other:?}"))),
     }
 }

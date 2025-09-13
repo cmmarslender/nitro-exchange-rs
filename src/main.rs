@@ -125,6 +125,7 @@ async fn run_server(port: u16, vsock: bool) {
         let addr = VsockAddr::new(VMADDR_CID_ANY, port as u32);
         let listener = VsockListener::bind(addr).expect("failed to bind vsock");
         let acceptor = VsockAcceptor::new(listener);
+        info!("Listening on cid: {VMADDR_CID_ANY}, port: {port}");
         axum::serve(acceptor, app).await.unwrap();
     } else {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));

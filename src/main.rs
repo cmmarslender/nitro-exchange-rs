@@ -1,17 +1,22 @@
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::SocketAddr, sync::{Arc, Mutex}};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
 use aes_gcm::aead::{Aead, KeyInit};
-use axum::{extract::State, http, routing::post, Json, Router};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use axum::http::StatusCode;
-use base64::{engine::general_purpose, Engine as _};
+use axum::{Json, Router, extract::State, http, routing::post};
+use base64::{Engine as _, engine::general_purpose};
+use clap::{Parser, Subcommand};
 use hkdf::Hkdf;
-use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
+use log::info;
 use p256::elliptic_curve::rand_core::OsRng;
+use p256::{EncodedPoint, PublicKey, ecdh::EphemeralSecret};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
-use log::info;
 
 const INFO_STRING: &str = "nitro-key-exchange-v1";
 
@@ -58,8 +63,42 @@ macro_rules! sensitivelog {
     ($($arg:tt)*) => {};
 }
 
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Cli {
+    #[command(subcommand)]
+    mode: Mode,
+}
+
+#[derive(Subcommand)]
+enum Mode {
+    /// Run as the enclave server
+    Server {
+        #[arg(long, default_value = "3001")]
+        port: u16,
+    },
+    /// Run as a client that talks to the server
+    Client {
+        #[arg(long, default_value = "http://127.0.0.1:3001")]
+        url: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
+    let cli = Cli::parse();
+
+    match cli.mode {
+        Mode::Server { port } => {
+            run_server(port).await;
+        }
+        Mode::Client { url: _ } => {
+            println!("Not Implemented");
+        }
+    }
+}
+
+async fn run_server(port: u16) {
     env_logger::init();
 
     let state = AppState {
@@ -77,9 +116,11 @@ async fn main() {
         .with_state(state)
         .layer(cors);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     info!("Listening on {}", addr);
-    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await.unwrap();
+    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
+        .await
+        .unwrap();
 }
 
 async fn handshake(
@@ -96,7 +137,8 @@ async fn handshake(
         .decode(&payload.public_key)
         .expect("invalid base64 publicKey");
     let client_point = EncodedPoint::from_bytes(&client_pub_bytes).expect("bad public key");
-    let client_pub = PublicKey::from_sec1_bytes(client_point.as_bytes()).expect("Invalid public key");
+    let client_pub =
+        PublicKey::from_sec1_bytes(client_point.as_bytes()).expect("Invalid public key");
 
     // Generate our own ephemeral keypair for this session
     let server_secret = EphemeralSecret::random(&mut OsRng);
@@ -108,7 +150,9 @@ async fn handshake(
     let shared_secret_bytes = shared.raw_secret_bytes();
 
     // HKDF using the client provided salt + info
-    let salt = general_purpose::STANDARD.decode(&payload.salt).expect("invalid base64 salt");
+    let salt = general_purpose::STANDARD
+        .decode(&payload.salt)
+        .expect("invalid base64 salt");
     let info = payload.info.as_bytes();
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret_bytes);
     let mut okm = [0u8; 32]; // 32 bytes = AES-256
@@ -121,7 +165,11 @@ async fn handshake(
         sessions.insert(session_id.clone(), okm.to_vec());
     }
 
-    sensitivelog!("Session ID: {} | Private Key: {}", session_id, general_purpose::STANDARD.encode(okm));
+    sensitivelog!(
+        "Session ID: {} | Private Key: {}",
+        session_id,
+        general_purpose::STANDARD.encode(okm)
+    );
 
     Ok(Json(ServerHandshake {
         session_id,
@@ -136,7 +184,8 @@ async fn decrypt(
     // Look up the session key to get the shared aes key
     let key_bytes = {
         let sessions = state.sessions.lock().unwrap();
-        sessions.get(&payload.session_id)
+        sessions
+            .get(&payload.session_id)
             .cloned()
             .ok_or((StatusCode::BAD_REQUEST, "invalid session id".into()))?
     };
@@ -146,10 +195,17 @@ async fn decrypt(
     let cipher = Aes256Gcm::new(key);
 
     // Get the ciphertext, initialization vector from the request
-    let ct_bytes = general_purpose::STANDARD.decode(&payload.ciphertext)
+    let ct_bytes = general_purpose::STANDARD
+        .decode(&payload.ciphertext)
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid ciphertext".into()))?;
-    let iv_bytes = general_purpose::STANDARD.decode(&payload.initialization_vector)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid initialization vector".into()))?;
+    let iv_bytes = general_purpose::STANDARD
+        .decode(&payload.initialization_vector)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "invalid initialization vector".into(),
+            )
+        })?;
 
     if iv_bytes.len() != 12 {
         return Err((StatusCode::BAD_REQUEST, "IV must be 12 bytes".into()));
@@ -157,12 +213,16 @@ async fn decrypt(
     let nonce = Nonce::from_slice(&iv_bytes);
 
     // Do the decrypt
-    let plaintext_bytes = cipher.decrypt(nonce, ct_bytes.as_ref())
+    let plaintext_bytes = cipher
+        .decrypt(nonce, ct_bytes.as_ref())
         .map_err(|_| (StatusCode::BAD_REQUEST, "decryption failed".into()))?;
     let plaintext = String::from_utf8(plaintext_bytes)
         .map_err(|_| (StatusCode::BAD_REQUEST, "decryption failed".into()))?;
 
-    sensitivelog!("Ciphertext: {} | Plaintext: {plaintext}", payload.ciphertext);
+    sensitivelog!(
+        "Ciphertext: {} | Plaintext: {plaintext}",
+        payload.ciphertext
+    );
 
     Ok(Json(DecryptResponse { plaintext }))
 }

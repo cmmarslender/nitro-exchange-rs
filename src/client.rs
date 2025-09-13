@@ -5,10 +5,15 @@ use hkdf::Hkdf;
 use p256::ecdh::EphemeralSecret;
 use p256::{EncodedPoint, PublicKey};
 use sha2::Sha256;
+use tokio_vsock::{VsockAddr, VsockStream, VMADDR_CID_ANY};
+use hyper::{Request};
+use http_body_util::Full;
+use bytes::Bytes;
+use hyper_util::rt::tokio::TokioIo;
+use hyper::client::conn;
+use http_body_util::BodyExt; // gives you .collect()
 
-pub(crate) async fn run_client(url: String) {
-    let client = reqwest::Client::new();
-
+pub(crate) async fn run_client(host: String, port: u16, vsock: bool) {
     // Generate our own ephemeral keypair for this session
     let client_secret = EphemeralSecret::random(&mut OsRng);
     let client_public = EncodedPoint::from(client_secret.public_key());
@@ -24,15 +29,11 @@ pub(crate) async fn run_client(url: String) {
         info: crate::INFO_STRING.to_string(),
     };
 
-    let resp = client
-        .post(format!("{url}/handshake"))
-        .json(&handshake_req)
-        .send()
-        .await
-        .unwrap()
-        .json::<HandshakeResponse>()
-        .await
-        .unwrap();
+    let resp: HandshakeResponse = if vsock {
+        do_handshake_vsock(VMADDR_CID_ANY, port, &handshake_req).await
+    } else {
+        do_handshake_http(&format!{"{host}:{port}"}, &handshake_req).await
+    };
 
     println!("Got session_id: {}", resp.session_id);
 
@@ -57,4 +58,49 @@ pub(crate) async fn run_client(url: String) {
         "Derived shared private key {}",
         general_purpose::STANDARD.encode(okm)
     );
+}
+
+async fn do_handshake_http(
+    url: &str,
+    handshake_req: &HandshakeRequest,
+) -> HandshakeResponse {
+
+    let client = reqwest::Client::new();
+
+    client
+        .post(format!("{url}/handshake"))
+        .json(&handshake_req)
+        .send()
+        .await
+        .unwrap()
+        .json::<HandshakeResponse>()
+        .await
+        .unwrap()
+}
+
+async fn do_handshake_vsock(
+    cid: u32,
+    port: u16,
+    handshake_req: &HandshakeRequest,
+) -> HandshakeResponse {
+    let addr = VsockAddr::new(cid, u32::from(port));
+    let stream = VsockStream::connect(addr).await.expect("vsock connect failed");
+    let io = TokioIo::new(stream);
+
+    let (mut sender, conn) = conn::http1::handshake(io).await.unwrap();
+    tokio::spawn(async move {
+        if let Err(err) = conn.await {
+            eprintln!("connection error: {err:?}");
+        }
+    });
+
+    let body_bytes = serde_json::to_vec(handshake_req).unwrap();
+    let req = Request::post("/handshake")
+        .header("content-type", "application/json")
+        .body(Full::new(Bytes::from(body_bytes)))
+        .unwrap();
+
+    let resp = sender.send_request(req).await.unwrap();
+    let bytes: Bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
 }

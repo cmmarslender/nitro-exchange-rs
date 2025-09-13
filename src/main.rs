@@ -60,8 +60,14 @@ enum Mode {
     },
     /// Run as a client that talks to the server
     Client {
-        #[arg(long, default_value = "http://127.0.0.1:3001")]
-        url: String,
+        #[arg(long, default_value = "http://127.0.0.1")]
+        host: String,
+
+        #[arg(long, default_value = "3001")]
+        port: u16,
+
+        #[arg(long)]
+        vsock: bool,
     },
 }
 
@@ -73,8 +79,8 @@ async fn main() {
         Mode::Server { port, vsock } => {
             server::run_server(port, vsock).await;
         }
-        Mode::Client { url } => {
-            client::run_client(url).await;
+        Mode::Client { host, port, vsock } => {
+            client::run_client(host, port, vsock).await;
         }
     }
 }

@@ -8,8 +8,7 @@ use hyper::client::conn;
 use hyper::Request;
 use hyper_util::rt::tokio::TokioIo;
 use log::info;
-use nitro_exchange_common::{DecryptRequest, DecryptResponse, HandshakeRequest, HandshakeResponse};
-use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value;
 use std::net::SocketAddr;
 use tokio_vsock::VsockAddr;
 use tokio_vsock::VsockStream;
@@ -62,28 +61,24 @@ async fn main() {
 
 async fn handshake(
     State(proxy_config): State<ProxyConfig>,
-    Json(payload): Json<HandshakeRequest>,
-) -> Result<Json<HandshakeResponse>, (StatusCode, String)> {
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
     proxy_request(proxy_config.clone(), "/handshake", payload).await
 }
 
 // Handler that either processes locally or proxies to vsock
 async fn decrypt(
     State(proxy_config): State<ProxyConfig>,
-    Json(payload): Json<DecryptRequest>,
-) -> Result<Json<DecryptResponse>, (StatusCode, String)> {
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
     proxy_request(proxy_config.clone(), "/decrypt", payload).await
 }
 
-async fn proxy_request<Req, Resp>(
+async fn proxy_request(
     proxy_config: ProxyConfig,
     endpoint: &str,
-    payload: Req,
-) -> Result<Json<Resp>, (StatusCode, String)>
-where
-    Req: Serialize,
-    Resp: DeserializeOwned,
-{
+    payload: Value,
+) -> Result<Json<Value>, (StatusCode, String)> {
     // Connect to enclave vsock
     let addr = VsockAddr::new(proxy_config.cid, proxy_config.vsock_port);
     let stream = VsockStream::connect(addr).await.map_err(|e| {
@@ -147,7 +142,7 @@ where
         })?
         .to_bytes();
 
-    let response: Resp = serde_json::from_slice(&body_bytes).map_err(|e| {
+    let response: Value = serde_json::from_slice(&body_bytes).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("json parse failed: {e}"),

@@ -11,6 +11,7 @@ use p256::elliptic_curve::rand_core::OsRng;
 use sha2::Sha256;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
+use log::info;
 
 const INFO_STRING: &str = "nitro-key-exchange-v1";
 
@@ -45,8 +46,22 @@ struct DecryptResponse {
     plaintext: String,
 }
 
+#[cfg(feature = "insecure-logs")]
+macro_rules! sensitivelog {
+    ($($arg:tt)*) => {
+        log::log!(target: "insecure", log::Level::Info, $($arg)*);
+    };
+}
+
+#[cfg(not(feature = "insecure-logs"))]
+macro_rules! sensitivelog {
+    ($($arg:tt)*) => {};
+}
+
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let state = AppState {
         sessions: Arc::new(Mutex::new(HashMap::new())),
     };
@@ -63,7 +78,7 @@ async fn main() {
         .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    println!("Listening on {}", addr);
+    info!("Listening on {}", addr);
     axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await.unwrap();
 }
 
@@ -106,7 +121,7 @@ async fn handshake(
         sessions.insert(session_id.clone(), okm.to_vec());
     }
 
-    //println!("Session ID: {} | Private Key: {}", session_id, general_purpose::STANDARD.encode(okm));
+    sensitivelog!("Session ID: {} | Private Key: {}", session_id, general_purpose::STANDARD.encode(okm));
 
     Ok(Json(ServerHandshake {
         session_id,
@@ -147,7 +162,7 @@ async fn decrypt(
     let plaintext = String::from_utf8(plaintext_bytes)
         .map_err(|_| (StatusCode::BAD_REQUEST, "decryption failed".into()))?;
 
-    //println!("Ciphertext: {} | Plaintext: {plaintext}", payload.ciphertext);
+    sensitivelog!("Ciphertext: {} | Plaintext: {plaintext}", payload.ciphertext);
 
     Ok(Json(DecryptResponse { plaintext }))
 }

@@ -11,9 +11,11 @@ use clap::Parser;
 use hkdf::Hkdf;
 use log::info;
 use nitro_exchange_common::{
-    DecryptRequest, DecryptResponse, HandshakeRequest, HandshakeResponse, INFO_STRING,
+    AttestationUserData, DecryptRequest, DecryptResponse, HandshakeRequest, HandshakeResponse,
+    INFO_STRING,
 };
 use p256::elliptic_curve::rand_core::OsRng;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{ecdh::EphemeralSecret, EncodedPoint, PublicKey};
 use serde_bytes::ByteBuf;
 use sha2::Sha256;
@@ -109,8 +111,10 @@ async fn handshake(
 
     // Generate our own ephemeral keypair for this session
     let server_secret = EphemeralSecret::random(&mut OsRng);
-    let server_public = EncodedPoint::from(server_secret.public_key());
-    let server_pub_b64 = general_purpose::STANDARD.encode(server_public.as_bytes());
+    let server_public = PublicKey::from(&server_secret);
+    let encoded_point = server_public.to_encoded_point(false);
+    let public_key_bytes = encoded_point.as_bytes().to_vec();
+    let server_pub_b64 = general_purpose::STANDARD.encode(&public_key_bytes);
 
     // Derive the shared secret from our secret key and the clients public key
     let shared = server_secret.diffie_hellman(&client_pub);
@@ -132,7 +136,10 @@ async fn handshake(
         sessions.insert(session_id.clone(), okm.to_vec());
     }
 
-    let attestation_doc = get_attestation(Some(server_public.as_bytes().to_vec()));
+    let attestation_doc = get_attestation(
+        Some(AttestationUserData { salt: payload.salt }),
+        Some(public_key_bytes),
+    );
     let attestation = match attestation_doc {
         Ok(doc) => Some(general_purpose::STANDARD.encode(doc.as_slice())),
         Err(err) => {
@@ -228,19 +235,32 @@ impl Listener for VsockAcceptor {
     }
 }
 
-fn get_attestation(user_data: Option<Vec<u8>>) -> Result<Vec<u8>, io::Error> {
+fn get_attestation(
+    user_data: Option<AttestationUserData>,
+    public_key: Option<Vec<u8>>,
+) -> Result<Vec<u8>, io::Error> {
     let fd = nsm_init();
     if fd < 0 {
         return Err(io::Error::other("failed to open /dev/nsm"));
     }
 
+    let serialized_user_data = user_data
+        .map(|ud| {
+            serde_json::to_vec(&ud)
+                .map_err(|e| io::Error::other(format!("failed to serialize user_data: {e}")))
+        })
+        .transpose()?; // Option<Result<T,E>> → Result<Option<T>,E>
+
     let req = Request::Attestation {
-        user_data: user_data.map(ByteBuf::from),
+        user_data: serialized_user_data.map(ByteBuf::from),
         nonce: None,
-        public_key: None,
+        public_key: public_key.map(ByteBuf::from),
     };
 
     let resp: Response = nsm_process_request(fd, req);
+
+    // close the FD
+    let _ = nix::unistd::close(fd);
 
     match resp {
         Response::Attestation { document } => Ok(document),

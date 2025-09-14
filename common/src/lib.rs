@@ -15,6 +15,11 @@ pub struct HandshakeResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct AttestationUserData {
+    pub salt: String,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct DecryptRequest {
     pub session_id: String,
     pub ciphertext: String,

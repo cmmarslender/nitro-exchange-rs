@@ -32,7 +32,7 @@ Reference Rust client demonstrating secure communication:
 - Performs ECDH key exchange with the enclave
 - Derives shared encryption keys using HKDF
 - Supports both direct HTTP and VSock communication modes
-- Validates attestation documents (when available)
+- Validates attestation documents (Not yet implemented in this version)
 
 **Note**: Client implementations are available in multiple languages (React/Next.js, etc.) demonstrating how to integrate with the proxy/enclave from different platforms and frameworks.
 

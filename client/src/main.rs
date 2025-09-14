@@ -67,6 +67,8 @@ async fn main() {
         debug!("Attestation response JSON: {json}");
     }
 
+    // @TODO attestation doc needs to be validated here, or else we don't know for sure we're talking directly with the enclave
+
     let server_pub_bytes = general_purpose::STANDARD
         .decode(&resp.public_key)
         .expect("Invalid base64 public key");

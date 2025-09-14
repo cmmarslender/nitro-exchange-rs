@@ -1,0 +1,143 @@
+# Nitro Exchange
+
+A secure key exchange and encryption service built for AWS Nitro Enclaves, providing cryptographically verifiable secure communication channels.
+
+## Overview
+
+Nitro Exchange is a Rust-based solution that enables secure key exchange and encrypted communication using AWS Nitro Enclaves for hardware-level security guarantees. It implements Elliptic Curve Diffie-Hellman (ECDH) key exchange with HKDF key derivation and AES-256-GCM encryption, all within the trusted execution environment of a Nitro Enclave.
+
+**Key Benefit**: Nitro Exchange allows infrastructure layers to terminate TLS connections and handle network traffic while cryptographically guaranteeing that sensitive data remains accessible only to the verified enclave code. This enables cryptographically provable privacy guarantees—users can verify that their sensitive data (like private keys) cannot be accessed by anyone, even if they don't trust the infrastructure operators.
+
+## Architecture
+
+The project consists of four main components:
+
+### Enclave (`enclave/`)
+The core secure service running inside an AWS Nitro Enclave. Features:
+- **Secure Key Exchange**: ECDH-based handshake protocol with P-256 curves
+- **Attestation Support**: Generates cryptographic attestation documents proving enclave integrity
+- **AES-256-GCM Encryption**: Secure symmetric encryption for data protection
+- **Session Management**: Maintains isolated encryption sessions with unique session IDs
+- **VSock & HTTP Support**: HTTP support for testing outside enclave environments
+
+### Proxy (`proxy/`)
+HTTP-to-VSock bridge that enables external communication with the enclave:
+- **Zero Knowledge Infrastructure**: Infrastructure layers can handle encrypted traffic without accessing sensitive data
+- Accepts HTTP requests from external clients
+- Forwards requests to the enclave via VSock (inter-VM communication)
+- Transparent request/response proxying
+
+### Client (`client/`)
+Reference Rust client demonstrating secure communication:
+- Performs ECDH key exchange with the enclave
+- Derives shared encryption keys using HKDF
+- Supports both direct HTTP and VSock communication modes
+- Validates attestation documents (when available)
+
+**Note**: Client implementations are available in multiple languages (React/Next.js, etc.) demonstrating how to integrate with the proxy/enclave from different platforms and frameworks.
+
+### Common (`common/`)
+Shared data structures and constants:
+- Protocol message definitions (handshake, decrypt requests/responses)
+- Serialization/deserialization logic
+- Protocol version constants
+
+## Security Features
+
+- **Hardware-Verified Security**: Runs in AWS Nitro Enclaves for hardware-level isolation
+- **Cryptographic Attestation**: Provides verifiable proof of enclave integrity and code authenticity
+- **Perfect Forward Secrecy**: Each session uses ephemeral ECDH key pairs
+- **Strong Encryption**: AES-256-GCM with HKDF key derivation
+- **Session Isolation**: Each client session has independent encryption keys
+- **Memory Safety**: Written in Rust for memory-safe cryptographic operations
+
+## Protocol Flow
+
+1. **Handshake Phase**:
+   - Client generates ephemeral ECDH key pair and random salt
+   - Client sends public key, salt, and protocol info to enclave
+   - Enclave generates its own ephemeral key pair
+   - Both parties derive shared secret using ECDH
+   - Shared AES-256 key derived using HKDF with salt and info string
+   - **Attestation Integration**: Enclave embeds its public key and the client-provided salt in the attestation document, cryptographically proving both the authenticity of the key exchange and freshness of the session (preventing replay attacks)
+   - Enclave returns its public key, session ID, and attestation document
+   - Client can verify the attestation to ensure communication is with the authentic enclave, not an intermediary
+
+2. **Encryption Phase**:
+   - Client encrypts data using derived AES-256-GCM key
+   - Client sends ciphertext, IV, and session ID to enclave
+   - **Infrastructure Transparency**: The parent EC2 instance, proxy, and other infrastructure layers can see the ciphertext but cannot decrypt it, since the decryption key was provably generated only within the enclave
+   - Enclave decrypts using session-specific key
+   - **Note**: The enclave returns plaintext in this demo to verify successful key derivation and encryption/decryption. In production, you would process the decrypted data within the enclave and return only non-sensitive results.
+
+## Build and Deployment
+
+### Prerequisites
+- Rust toolchain
+- AWS Nitro Enclaves SDK (for enclave deployment)
+- Docker (required by Nitro Enclaves build process)
+
+### Building for AWS Production
+
+Build the enclave for deployment on AWS Nitro Enclaves:
+
+```bash
+# Build enclave Docker image
+docker build -t nitro-exchange:latest .
+
+# Convert Docker image to Enclave Image File (EIF)
+nitro-cli build-enclave \
+  --docker-uri nitro-exchange:latest \
+  --output-file ~/nitro.eif
+
+# Build proxy binary for the host
+cargo build --release --bin nitro-exchange-proxy
+```
+
+### Running on AWS
+
+```bash
+# Run enclave
+nitro-cli run-enclave \
+  --eif-path ~/nitro.eif \
+  --cpu-count 2 \
+  --memory 512 \
+  --enclave-cid 5 \
+  --enclave-name nitro-exchange
+
+# Run proxy (on host, outside enclave)
+./target/release/nitro-exchange-proxy --port 3001 --cid 5 --vsock-port 5000
+
+# Note: For browser-based clients (React/Next.js), WebCrypto requires TLS.
+# You'll need a TLS terminator (nginx, ALB, etc.) in front of the proxy service.
+
+```
+
+### Local Development Testing
+
+For testing without AWS Nitro Enclaves:
+
+```bash
+# Start enclave server (HTTP mode for local testing)
+RUST_LOG=info cargo run --bin nitro-exchange-enclave -- --port 3001
+
+# Run client directly (no proxy needed in local mode)
+RUST_LOG=info cargo run --bin nitro-exchange-client -- --host http://127.0.0.1 --port 3001
+```
+
+## Configuration
+
+### Enclave Options
+- `--port`: Port to bind to (default: 3001)
+- `--vsock`: Listen on VSock instead of TCP (Must run in this mode in enclaves)
+
+### Proxy Options
+- `--port`: HTTP port to bind to (default: 3001)
+- `--cid`: Enclave VSock CID (default: 5)
+- `--vsock-port`: Enclave VSock port (default: 5000)
+
+### Client Options
+- `--host`: Server host (default: http://127.0.0.1)
+- `--port`: Server port (default: 3001)
+- `--vsock`: Use VSock instead of HTTP
+- `--cid`: VSock CID (default: 5)

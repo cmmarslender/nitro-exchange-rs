@@ -26,7 +26,7 @@ RUN cargo build --release --target x86_64-unknown-linux-musl --package nitro-exc
 COPY client/src/ client/src/
 COPY enclave/src/ enclave/src/
 COPY proxy/src/ proxy/src/
-RUN cargo build --release --target x86_64-unknown-linux-musl --package nitro-exchange-enclave --features insecure-logs
+RUN cargo build --release --target x86_64-unknown-linux-musl --package nitro-exchange-enclave
 
 # ---- Runtime Stage (scratch, fully static) ----
 FROM scratch

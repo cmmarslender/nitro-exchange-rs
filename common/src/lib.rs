@@ -16,6 +16,7 @@ pub struct HandshakeResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct AttestationUserData {
+    pub public_key: String,
     pub salt: String,
 }
 

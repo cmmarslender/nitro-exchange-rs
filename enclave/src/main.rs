@@ -136,10 +136,10 @@ async fn handshake(
         sessions.insert(session_id.clone(), okm.to_vec());
     }
 
-    let attestation_doc = get_attestation(
-        Some(AttestationUserData { salt: payload.salt }),
-        Some(public_key_bytes),
-    );
+    let attestation_doc = get_attestation(Some(AttestationUserData {
+        public_key: server_pub_b64.clone(),
+        salt: payload.salt,
+    }));
     let attestation = match attestation_doc {
         Ok(doc) => Some(general_purpose::STANDARD.encode(doc.as_slice())),
         Err(err) => {
@@ -235,10 +235,7 @@ impl Listener for VsockAcceptor {
     }
 }
 
-fn get_attestation(
-    user_data: Option<AttestationUserData>,
-    public_key: Option<Vec<u8>>,
-) -> Result<Vec<u8>, io::Error> {
+fn get_attestation(user_data: Option<AttestationUserData>) -> Result<Vec<u8>, io::Error> {
     let fd = nsm_init();
     if fd < 0 {
         return Err(io::Error::other("failed to open /dev/nsm"));
@@ -254,7 +251,7 @@ fn get_attestation(
     let req = Request::Attestation {
         user_data: serialized_user_data.map(ByteBuf::from),
         nonce: None,
-        public_key: public_key.map(ByteBuf::from),
+        public_key: None,
     };
 
     let resp: Response = nsm_process_request(fd, req);

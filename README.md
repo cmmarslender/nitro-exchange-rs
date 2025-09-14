@@ -8,6 +8,62 @@ Nitro Exchange is a Rust-based solution that enables secure key exchange and enc
 
 **Key Benefit**: Nitro Exchange allows infrastructure layers to terminate TLS connections and handle network traffic while cryptographically guaranteeing that sensitive data remains accessible only to the verified enclave code. This enables cryptographically provable privacy guarantees—users can verify that their sensitive data (like private keys) cannot be accessed by anyone, even if they don't trust the infrastructure operators.
 
+### Why Attested ECDH Instead of TLS-at-Enclave
+
+Some Nitro Enclave projects terminate TLS directly inside the enclave and expose a WebSocket/TLS endpoint. In that model, the enclave embeds its TLS public key in the attestation document, and clients are expected to trust that the TLS session is therefore anchored in the enclave. This works well for server-to-server use cases where the client can fetch and validate the attestation out-of-band.
+
+However, this model breaks down in web browsers: the browser’s JavaScript environment has no access to the TLS handshake details or server certificate. That means the client cannot directly confirm that the TLS key it negotiated actually matches the attested enclave key. To bridge that gap, projects using this pattern typically introduce a trusted server to validate attestation on the client’s behalf, shifting the trust boundary back outside the enclave.
+
+This design avoids this limitation by using an attested ECDH key exchange. The enclave generates an ephemeral ECDH public key, embeds it in the attestation document, and returns it to the browser. The browser validates the attestation directly against AWS Nitro’s root of trust and checks PCR values. Once validated, the browser completes the ECDH exchange and derives a symmetric key that is provably known only to the enclave. TLS termination on the parent instance still protects transport, but confidentiality is guaranteed end-to-end: all payloads after the key exchange are encrypted with the enclave-bound key.
+
+### Flow Overview
+
+```
+Browser                          Parent EC2                        Enclave
+   |                                |                                 |
+   |---- TLS Handshake ------------>|                                 |
+   |  (terminated on parent)        |                                 |
+   |                                |                                 |
+   |---- Request Key Exchange ----->|---- Forward ------------------->|
+   |                                |   Enclave generates ephemeral   |
+   |                                |   ECDH public key + attestation |
+   |                                |<------------------------------- |
+   |<--- ECDH pubkey + attestation--|                                 |
+   |                                |                                 |
+   |-- Validate attestation (AWS root, PCRs, embedded pubkey)         |
+   |-- Perform ECDH, derive shared key ------------------------------>|
+   |                                |                                 |
+   |===> All further app data encrypted with shared key (inside TLS)  |
+
+```
+
+With this model, the browser does not rely on TLS certificate binding (which it can’t observe). Instead, it uses attestation + ECDH to guarantee enclave-only access to secrets, while TLS still provides transport security.
+
+### Threat Model
+
+**Protects against:**
+
+- A malicious or compromised parent EC2 instance:
+  - Even if the parent sees decrypted TLS traffic, it only observes ciphertext once the enclave-derived symmetric key is in use. 
+- MITM or replay attacks after TLS termination:
+  - The symmetric session key is derived through an attested ECDH exchange and is bound to the enclave. 
+  - This prevents a parent or MITM from forging new messages, since only the enclave holds the valid key. 
+  - However, ciphertext replay within the established session (after key exchange) is still theoretically possible unless higher-level replay protection (e.g. nonces, sequence numbers) is added. 
+- Incorrect enclave launch:
+  - Validating PCRs ensures the enclave image, kernel, and configuration match expected values. 
+- Fake attestations:
+  - AWS Nitro Root CA verification ensures only genuine enclaves can produce valid attestation documents.
+
+**Does not protect against:**
+
+- A malicious enclave image:
+  - If the code inside the enclave is backdoored, attestation will still succeed as long as PCRs match the backdoored image. 
+- Message suppression or delay by the parent:
+  - A malicious or compromised parent can drop or delay messages. 
+  - This impacts availability but does not compromise confidentiality or integrity.
+- Browser trust assumptions:
+  - The browser still must trust its local environment (e.g., no malicious extensions) to validate attestation correctly.
+
 ## Architecture
 
 The project consists of four main components:

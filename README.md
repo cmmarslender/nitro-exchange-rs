@@ -2,6 +2,8 @@
 
 A secure key exchange and encryption service built for AWS Nitro Enclaves, providing cryptographically verifiable secure communication channels.
 
+The browser application for this project is available in the [cmmarslender/nitro-exchange-next repo](https://github.com/cmmarslender/nitro-exchange-next).
+
 ## Overview
 
 Nitro Exchange is a Rust-based solution that enables secure key exchange and encrypted communication using AWS Nitro Enclaves for hardware-level security guarantees. It implements Elliptic Curve Diffie-Hellman (ECDH) key exchange with HKDF key derivation and AES-256-GCM encryption, all within the trusted execution environment of a Nitro Enclave.
